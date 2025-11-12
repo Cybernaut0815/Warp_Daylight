@@ -1,5 +1,10 @@
 # WarpRays
 
+## Description
+
+A short repo for testing Nvidia warp by setting up direct sunlight calculations.
+
+
 ## Installation
 
 1. Create a virtual environment:
