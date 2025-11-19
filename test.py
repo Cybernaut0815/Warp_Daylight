@@ -6,7 +6,8 @@ import os
 import trimesh
 
 from src.IO import load_obj
-
+from src.viz import mesh
+from src.raycast import direct_sunlight
 
 if __name__ == "__main__":
     print("CUDA Device Count:")
@@ -62,3 +63,41 @@ if __name__ == "__main__":
     print("--------------------------------")
     print(vertex_normals.shape)
     print(vertex_normals[:10])
+    
+    
+    ###### Raycasting ######
+    ###### NEEDS TESTING AND OPTIMIZATION ######
+    
+    start_positions = vertices.copy()
+    start_normals = vertex_normals.copy()
+    
+    ### Raycasting ###
+    hitcounts = direct_sunlight.raycast_directional(vertices, face_indices, start_positions, start_normals, ray_directions)
+    print("\nHitcounts:")
+    print("--------------------------------")
+    print(hitcounts.shape)
+    print(hitcounts[:10])
+    
+    ###### End of Raycasting ######
+    
+    
+    ###### Visualizing ######
+    ###### For showing the raycasting results ######
+    
+    mesh.visualize_mesh(vertices, 
+                        face_counts, 
+                        face_indices, 
+                        vertex_colors=None, 
+                        vertex_normals=vertex_normals, 
+                        face_normals=face_normals, 
+                        wireframe=True,
+                        line_width=1.0)
+    
+    # mesh.visualize_mesh(vertices, 
+    #                 face_counts, 
+    #                 face_indices, 
+    #                 vertex_colors=None, 
+    #                 vertex_normals=vertex_normals, 
+    #                 face_normals=face_normals, 
+    #                 wireframe=True,
+    #                 line_width=1.0)

@@ -46,3 +46,9 @@ To deactivate the virtual environment, simply run:
 deactivate
 ```
 
+5. TO DO
+
+- [x] Implement basic loading and visualization
+- [x] Implement basic direct raycasting
+- [ ] Test and improve the raycasting
+- [ ] Combine with 
