@@ -56,4 +56,4 @@ deactivate
 - [ ] Add fast API for hosting warp environment
 
 
-![sunlight-hours-demo](media/sunlight-hours-demo.png)
+![sunlight-hours-demo](media/direct_sunlight_001.PNG)
