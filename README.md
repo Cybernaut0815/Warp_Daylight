@@ -50,5 +50,10 @@ deactivate
 
 - [x] Implement basic loading and visualization
 - [x] Implement basic direct raycasting
-- [ ] Test and improve the raycasting
-- [ ] Combine with 
+- [x] Test and improve the raycasting
+- [ ] Combine with ray directions from ladybug
+- [ ] Add to work with EPW files
+- [ ] Add fast API for hosting warp environment
+
+
+![sunlight-hours-demo](media/sunlight-hours-demo.png)
