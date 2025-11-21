@@ -2,7 +2,7 @@
 
 ## Description
 
-A short repo for using (Warp by Nvidia)[https://github.com/NVIDIA/warp] for direct sunlight calculations.
+A short repo for using [Warp by Nvidia](https://github.com/NVIDIA/warp) for direct sunlight calculations.
 
 
 ## Installation
