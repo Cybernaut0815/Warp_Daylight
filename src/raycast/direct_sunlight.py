@@ -196,6 +196,14 @@ def raycast_directional_batch(
         light_directions: Light direction vectors FROM the sun (M, 3) for M directions
         offset_distance: Distance to offset ray origin along surface normal (default: 0.001)
         chunk_size: Max directions per kernel launch (default: 1000, 0 = no chunking)
+                   
+                   Chunk size considerations:
+                   - Small (250-500): Lower memory, better for limited VRAM
+                   - Medium (500-1500): Balanced, good default
+                   - Large (2000+): Better for high-end GPUs, more memory
+                   - 0 (no chunking): Process all directions at once (best for <2000 directions)
+                   
+                   To find optimal size for your GPU, run: benchmark_chunk_size.py
     
     Returns:
         hit_counts: Array of accumulated hit counts per vertex (N,) - range [0, M]

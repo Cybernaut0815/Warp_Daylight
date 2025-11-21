@@ -51,9 +51,11 @@ deactivate
 - [x] Implement basic loading and visualization
 - [x] Implement basic direct raycasting
 - [x] Test and improve the raycasting
-- [ ] Combine with ray directions from ladybug
+- [x] Combine with ray directions from ladybug
+- [ ] Test annual daylight expose implementation
+- [ ] Implement also with face centers and face normals not only vertex normals
 - [ ] Add to work with EPW files
 - [ ] Add fast API for hosting warp environment
 
 
-![sunlight-hours-demo](media/direct_sunlight_001.PNG)
+![sunlight-hours-demo](media/direct_sunlight_002.PNG)
