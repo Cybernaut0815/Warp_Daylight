@@ -52,9 +52,10 @@ deactivate
 - [x] Implement basic direct raycasting
 - [x] Test and improve the raycasting
 - [x] Combine with ray directions from ladybug
-- [ ] Test annual daylight expose implementation
-- [ ] Implement also with face centers and face normals not only vertex normals
-- [ ] Add to work with EPW files
+- [x] Test annual daylight expose implementation
+- [x] Implement also with face centers and face normals not only vertex normals
+- [ ] Add compatibility with EPW files
+- [ ] Add daylight comfort with given maximum reflections
 - [ ] Add fast API for hosting warp environment
 
 
