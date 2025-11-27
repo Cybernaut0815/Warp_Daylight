@@ -66,11 +66,12 @@ def raycast_batch_kernel(
     light_directions: wp.array(dtype=wp.vec3),
     num_directions: int,
     offset_distance: float,
+    use_backface_culling: int,
     hit_counts: wp.array(dtype=int)
 ):
     """
     Optimized batch raycast kernel that processes all sun directions in one launch.
-    Each thread processes one vertex for all sun directions.
+    Each thread processes one vertex/face for all sun directions.
     
     Args:
         mesh_id: Warp mesh ID
@@ -79,6 +80,7 @@ def raycast_batch_kernel(
         light_directions: Light direction vectors FROM the sun (M, 3) for M directions
         num_directions: Number of sun directions
         offset_distance: Distance to offset ray origin along surface normal
+        use_backface_culling: 1 to enable backface culling, 0 to disable
         hit_counts: Output array to store accumulated hit counts per vertex (N,)
     """
     vertex_id = wp.tid()
@@ -96,19 +98,26 @@ def raycast_batch_kernel(
         light_dir = wp.normalize(light_directions[dir_id])
         ray_dir = -light_dir  # Reverse to cast toward sun
         
-        # Backface culling
-        dot_product = wp.dot(surface_normal, ray_dir)
-        
-        if dot_product > 0.0:
-            # Surface is front-facing, cast ray
+        # Optional backface culling
+        if use_backface_culling == 1:
+            dot_product = wp.dot(surface_normal, ray_dir)
+            
+            if dot_product > 0.0:
+                # Surface is front-facing, cast ray
+                query = wp.mesh_query_ray(mesh_id, ray_origin_offset, ray_dir, 1.0e10)
+                
+                if query.result:
+                    total_hits += 1  # Occluded
+                # else: clear (contributes 0)
+            else:
+                # Back-facing surface (treat as occluded)
+                total_hits += 1
+        else:
+            # No backface culling - always cast ray
             query = wp.mesh_query_ray(mesh_id, ray_origin_offset, ray_dir, 1.0e10)
             
             if query.result:
                 total_hits += 1  # Occluded
-            # else: clear (contributes 0)
-        else:
-            # Back-facing surface (treat as occluded)
-            total_hits += 1
     
     hit_counts[vertex_id] = total_hits
 
@@ -180,7 +189,8 @@ def raycast_directional_batch(
     start_normals: np.ndarray,
     light_directions: np.ndarray,
     offset_distance: float = 0.001,
-    chunk_size: int = 1000
+    chunk_size: int = 1000,
+    use_backface_culling: bool = False
 ) -> np.ndarray:
     """
     OPTIMIZED: Perform directional raycasting for MULTIPLE light directions in a single kernel launch.
@@ -204,9 +214,11 @@ def raycast_directional_batch(
                    - 0 (no chunking): Process all directions at once (best for <2000 directions)
                    
                    To find optimal size for your GPU, run: benchmark_chunk_size.py
+        use_backface_culling: Enable backface culling (default: False)
+                             Set to True for face-based analysis
     
     Returns:
-        hit_counts: Array of accumulated hit counts per vertex (N,) - range [0, M]
+        hit_counts: Array of accumulated hit counts per vertex/face (N,) - range [0, M]
     """
     # Ensure inputs are contiguous float32 arrays
     vertices = np.ascontiguousarray(vertices, dtype=np.float32)
@@ -233,6 +245,9 @@ def raycast_directional_batch(
     # Prepare output array
     total_hit_counts = np.zeros(num_vertices, dtype=np.int32)
     
+    # Convert backface culling boolean to int for kernel
+    backface_culling_flag = 1 if use_backface_culling else 0
+    
     # Determine if chunking is needed
     use_chunking = chunk_size > 0 and num_directions > chunk_size
     
@@ -254,7 +269,7 @@ def raycast_directional_batch(
                 kernel=raycast_batch_kernel,
                 dim=num_vertices,
                 inputs=[mesh.id, start_positions_wp, start_normals_wp, light_directions_wp, 
-                       len(chunk_directions), offset_distance, hit_counts]
+                       len(chunk_directions), offset_distance, backface_culling_flag, hit_counts]
             )
             
             wp.synchronize()
@@ -269,7 +284,7 @@ def raycast_directional_batch(
             kernel=raycast_batch_kernel,
             dim=num_vertices,
             inputs=[mesh.id, start_positions_wp, start_normals_wp, light_directions_wp, 
-                   num_directions, offset_distance, hit_counts]
+                   num_directions, offset_distance, backface_culling_flag, hit_counts]
         )
         
         wp.synchronize()

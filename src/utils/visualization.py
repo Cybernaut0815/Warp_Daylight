@@ -10,6 +10,7 @@ def create_scene_with_mesh_and_wireframe(
     vertices: np.ndarray,
     faces: np.ndarray,
     vertex_colors: np.ndarray = None,
+    face_colors: np.ndarray = None,
     wireframe_color: Tuple[int, int, int, int] = (80, 80, 80, 255),
     line_width: float = 1.0
 ) -> trimesh.Scene:
@@ -20,6 +21,7 @@ def create_scene_with_mesh_and_wireframe(
         vertices: Vertex positions (N, 3)
         faces: Face indices (M, 3)
         vertex_colors: Optional vertex colors (N, 3) or (N, 4)
+        face_colors: Optional face colors (M, 3) or (M, 4) - takes precedence over vertex_colors
         wireframe_color: RGBA color for wireframe edges
         line_width: Width of wireframe lines
     
@@ -29,8 +31,11 @@ def create_scene_with_mesh_and_wireframe(
     # Create mesh
     mesh_obj = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     
-    # Set vertex colors if provided
-    if vertex_colors is not None:
+    # Set face colors if provided (takes precedence)
+    if face_colors is not None:
+        mesh_obj.visual.face_colors = face_colors
+    # Otherwise set vertex colors if provided
+    elif vertex_colors is not None:
         mesh_obj.visual.vertex_colors = vertex_colors
     
     # Create scene

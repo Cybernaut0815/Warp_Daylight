@@ -10,7 +10,7 @@ from src.utils import sun_vectors, color, mesh_utils, visualization
 
 if __name__ == "__main__":
     print("="*70)
-    print("ANNUAL SUNLIGHT ANALYSIS using Ladybug Sun Positions")
+    print("SINGLE DAY SUNLIGHT ANALYSIS using Ladybug Sun Positions")
     print("="*70)
     
     # Load mesh with normals
@@ -22,10 +22,10 @@ if __name__ == "__main__":
     print(f"  Vertices: {len(vertices)}, Faces: {len(faces)}")
     
     # ==========================================================================
-    # EXAMPLE 1: Summer Solstice Day (June 21) - New York City
+    # Summer Solstice Day (June 21) - New York City
     # ==========================================================================
     print("\n" + "="*70)
-    print("EXAMPLE 1: Summer Solstice (June 21) - New York City")
+    print("Summer Solstice (June 21) - New York City")
     print("="*70)
     
     try:

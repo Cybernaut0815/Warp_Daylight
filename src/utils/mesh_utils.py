@@ -68,3 +68,23 @@ def compute_face_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     
     return face_normals
 
+
+def compute_face_centroids(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """
+    Compute face centroids (center points of triangles).
+    
+    Args:
+        vertices: Vertex positions (N, 3)
+        faces: Face indices (M, 3)
+    
+    Returns:
+        centroids: Face centroid positions (M, 3)
+    """
+    v0 = vertices[faces[:, 0]]
+    v1 = vertices[faces[:, 1]]
+    v2 = vertices[faces[:, 2]]
+    
+    # Centroid is the average of the three vertices
+    centroids = (v0 + v1 + v2) / 3.0
+    
+    return centroids
