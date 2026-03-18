@@ -2,13 +2,15 @@
 FastAPI application entry point for the Annual Daylight Analysis API.
 
 Start the server with:
-    uvicorn app.main:app --host 0.0.0.0 --port 8000
+    python -m app.main          (uses settings from .env / environment)
+    uvicorn app.main:app        (manual override via CLI flags)
 """
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import settings
 from app.models.responses import HealthResponse
 from app.routers import analyze, sun
 
@@ -68,4 +70,16 @@ async def health() -> HealthResponse:
         status="ok",
         gpu_available=_gpu_available,
         warp_initialized=_warp_ready,
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
+        log_level=settings.log_level,
     )

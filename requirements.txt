@@ -1,6 +1,7 @@
 blosc==1.11.3
 certifi==2025.10.5
 fastapi>=0.115.0
+pydantic-settings>=2.0.0
 charset-normalizer==3.4.4
 click==8.1.7
 colorama==0.4.6

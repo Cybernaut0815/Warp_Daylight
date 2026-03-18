@@ -2,3 +2,4 @@ WarpEnv/*
 __pycache__/*
 *.pyc
 data/meshes/*
+.env
