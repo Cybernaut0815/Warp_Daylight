@@ -1,6 +1,12 @@
 """
 Example: Using Ladybug to calculate realistic sun positions for sunlight analysis
 """
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT))
+
 import numpy as np
 import time
 
@@ -16,7 +22,7 @@ if __name__ == "__main__":
     # Load mesh with normals
     print("\nLoading mesh...")
     vertices, face_counts, face_indices, face_normals, vertex_normals = mesh_utils.load_mesh_with_normals(
-        "data/meshes/bunny_closed.obj"
+        str(_PROJECT_ROOT / "data/meshes/bunny_closed.obj")
     )
     faces = face_indices.reshape(-1, 3)
     print(f"  Vertices: {len(vertices)}, Faces: {len(faces)}")
@@ -152,4 +158,3 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("COMPLETE")
     print("="*70)
-

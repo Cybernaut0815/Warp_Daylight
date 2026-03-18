@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT))
+
 import numpy as np
 import time
 
@@ -10,7 +16,7 @@ if __name__ == "__main__":
     
     # Load mesh with normals
     vertices, face_counts, face_indices, face_normals, vertex_normals = mesh_utils.load_mesh_with_normals(
-        "data/meshes/bunny_closed.obj"
+        str(_PROJECT_ROOT / "data/meshes/bunny_closed.obj")
     )
     faces = face_indices.reshape(-1, 3)
     print(f"Loaded mesh: {len(vertices)} vertices, {len(faces)} faces")
@@ -77,11 +83,6 @@ if __name__ == "__main__":
     print("\nHit count statistics:")
     print(f"  Range: {np.min(total_hitcounts)} to {np.max(total_hitcounts)}")
     print(f"  Mean: {np.mean(total_hitcounts):.2f}")
-    
-    # Create vertex colors with gradient based on accumulated hit counts
-    # Now backfacing vertices are counted as occluded (hit=1), so:
-    # Low hits = mostly clear view to sun = bright (green)
-    # High hits = mostly occluded from sun = dark (red)
     
     # Create gradient colors based on sunlight hours
     gradient_colors = [

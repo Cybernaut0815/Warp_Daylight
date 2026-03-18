@@ -1,6 +1,12 @@
 """
 Benchmark script to find optimal chunk size for raycast_directional_batch()
 """
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT))
+
 import numpy as np
 import time
 
@@ -67,7 +73,7 @@ if __name__ == "__main__":
     
     # Load mesh with normals
     vertices, face_counts, face_indices, face_normals, vertex_normals = mesh_utils.load_mesh_with_normals(
-        "data/meshes/bunny_closed.obj"
+        str(_PROJECT_ROOT / "data/meshes/bunny_closed.obj")
     )
     faces = face_indices.reshape(-1, 3)
     print(f"Mesh: {len(vertices)} vertices, {len(faces)} faces")
@@ -120,4 +126,3 @@ if __name__ == "__main__":
     print(f"  For your GPU and mesh size, use chunk_size={best_chunk[0]}")
     print(f"  Expected performance: ~{best_chunk[1]['avg_time_ms']:.1f} ms for {len(light_directions)} directions")
     print("="*60)
-
