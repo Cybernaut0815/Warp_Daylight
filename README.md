@@ -4,7 +4,7 @@ GPU-accelerated direct sunlight analysis for 3D meshes, powered by [NVIDIA Warp]
 
 Send mesh data in a USD-like format and receive per-vertex or per-face sunlight hours plus optional RGB colours for visualisation in any DCC tool (Maya, Blender, Omniverse, Rhino, etc.).
 
-![sunlight-hours-demo](media/direct_sunlight_003.PNG)
+![sunlight-hours-demo](media/Daylight_Output_001.png)
 
 ## Installation
 
