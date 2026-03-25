@@ -5,10 +5,14 @@ Start the server with:
     python -m app.main          (uses settings from .env / environment)
     uvicorn app.main:app        (manual override via CLI flags)
 """
+import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger("analyze")
 
 from app.core.config import settings
 from app.models.responses import HealthResponse
@@ -53,6 +57,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    if not request.url.path.startswith("/analyze"):
+        return await call_next(request)
+
+    t_start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - t_start) * 1000
+    print(
+        f"[TIMING] {request.method} {request.url.path}  FULL REQUEST: {elapsed_ms:.1f} ms"
+        f"  (includes JSON parsing + Pydantic validation + service + serialization)",
+        flush=True,
+    )
+    return response
+
 
 app.include_router(analyze.router)
 app.include_router(sun.router)

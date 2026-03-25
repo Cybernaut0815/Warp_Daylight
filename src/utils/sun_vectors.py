@@ -1,7 +1,9 @@
 """
 Helper functions to generate sun direction vectors using Ladybug
 """
+import math
 import numpy as np
+from functools import lru_cache
 from typing import List, Tuple, Optional, Union
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -110,61 +112,47 @@ def get_sun_vectors_from_ladybug(
     # Create sunpath calculator
     sunpath = Sunpath.from_location(location)
     
-    # Generate time series
     current_time = start_datetime
-    timestamps = []
-    sun_positions = []
-    
-    time_delta_minutes = time_step_minutes
-    
+    time_delta = timedelta(minutes=time_step_minutes)
+    deg2rad = math.pi / 180.0
+
+    altitudes: list[float] = []
+    azimuths: list[float] = []
+    timestamps: list[datetime] = []
+
     while current_time <= end_datetime:
-        # Get sun position for this time
         sun = sunpath.calculate_sun_from_date_time(current_time)
-        
-        # Only include times when sun is above horizon
+
         if sun.altitude > 0:
-            # Get sun vector (Ladybug uses different coordinate system)
-            # Ladybug: azimuth (0=North, 90=East), altitude (degrees above horizon)
-            # Convert to Cartesian coordinates
-            
-            # Azimuth: 0° = North, 90° = East, 180° = South, 270° = West
-            # Altitude: 0° = horizon, 90° = zenith
-            
-            altitude_rad = np.radians(sun.altitude)
-            azimuth_rad = np.radians(sun.azimuth)
-            
-            # Convert to Cartesian (standard convention: Y=North, X=East, Z=Up)
-            x = np.sin(azimuth_rad) * np.cos(altitude_rad)  # East
-            y = np.cos(azimuth_rad) * np.cos(altitude_rad)  # North
-            z = np.sin(altitude_rad)  # Up
-            
-            sun_position = np.array([x, y, z])
-            sun_position = sun_position / np.linalg.norm(sun_position)  # Normalize
-            
-            # Light direction is FROM the sun (negative of sun position)
-            light_direction = -sun_position
-            
-            sun_positions.append(light_direction)
+            altitudes.append(sun.altitude * deg2rad)
+            azimuths.append(sun.azimuth * deg2rad)
             timestamps.append(current_time)
-        
-        # Increment time
-        current_time += timedelta(minutes=time_delta_minutes)
-    
-    if len(sun_positions) == 0:
+
+        current_time += time_delta
+
+    if len(altitudes) == 0:
         raise ValueError(
             f"No sun positions found above horizon between {start_datetime} and {end_datetime}. "
             "Check your location and time range."
         )
-    
-    light_directions = np.array(sun_positions, dtype=np.float32)
-    
-    # Convert coordinate system if requested
-    # Ladybug uses: X=East, Y=North, Z=Up
-    # Y-up system uses: X=East, Y=Up, Z=North
+
+    alt = np.array(altitudes, dtype=np.float32)
+    az = np.array(azimuths, dtype=np.float32)
+
+    cos_alt = np.cos(alt)
+    # Azimuth: 0=North, 90=East  ->  X=East, Y=North, Z=Up
+    # Light direction is negated sun position (FROM the sun)
+    x = -(np.sin(az) * cos_alt)
+    y = -(np.cos(az) * cos_alt)
+    z = -np.sin(alt)
+
+    # Stack into (N, 3); already unit-length by construction
+    light_directions = np.column_stack((x, y, z))
+
     if coordinate_system == 'y_up':
-        # Convert from Z-up to Y-up: (x, y, z) -> (x, z, y)
+        # Z-up to Y-up: (x, y, z) -> (x, z, y)
         light_directions = light_directions[:, [0, 2, 1]]
-    
+
     return light_directions, timestamps
 
 
@@ -193,19 +181,38 @@ def get_yearly_sun_vectors(
     """
     if year is None:
         year = datetime.now().year
-    
+
+    dirs, ts = _get_yearly_sun_vectors_cached(
+        latitude, longitude, year, time_step_hours,
+        timezone if isinstance(timezone, (int, float)) else str(timezone),
+        coordinate_system,
+    )
+    return dirs.copy(), list(ts)
+
+
+@lru_cache(maxsize=32)
+def _get_yearly_sun_vectors_cached(
+    latitude: float,
+    longitude: float,
+    year: int,
+    time_step_hours: int,
+    timezone: Union[str, float],
+    coordinate_system: str,
+) -> Tuple[np.ndarray, tuple]:
+    """Cached inner implementation — returns immutable tuple of timestamps."""
     start_datetime = datetime(year, 1, 1, 0, 0)
     end_datetime = datetime(year, 12, 31, 23, 59)
-    
-    return get_sun_vectors_from_ladybug(
+
+    dirs, ts = get_sun_vectors_from_ladybug(
         latitude=latitude,
         longitude=longitude,
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         time_step_minutes=time_step_hours * 60,
         timezone=timezone,
-        coordinate_system=coordinate_system
+        coordinate_system=coordinate_system,
     )
+    return dirs, tuple(ts)
 
 
 def get_sun_vectors_for_typical_day(

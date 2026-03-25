@@ -4,6 +4,7 @@ Pydantic models for USD-like mesh data.
 These models mirror the UsdGeom.Mesh schema so DCC tools (Maya, Blender,
 Omniverse, Rhino) can send mesh data using familiar attribute names.
 """
+import numpy as np
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
@@ -52,13 +53,14 @@ class MeshData(BaseModel):
 
     @model_validator(mode="after")
     def validate_mesh_consistency(self) -> "MeshData":
-        for i, pt in enumerate(self.points):
-            if len(pt) != 3:
-                raise ValueError(
-                    f"points[{i}] has {len(pt)} components, expected 3"
-                )
+        pts = np.asarray(self.points)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(
+                f"points must be (N, 3); got shape {pts.shape}"
+            )
 
-        expected_index_count = sum(self.face_vertex_counts)
+        counts = np.asarray(self.face_vertex_counts, dtype=np.int64)
+        expected_index_count = int(counts.sum())
         if len(self.face_vertex_indices) != expected_index_count:
             raise ValueError(
                 f"face_vertex_indices length ({len(self.face_vertex_indices)}) "
@@ -66,19 +68,22 @@ class MeshData(BaseModel):
             )
 
         num_verts = len(self.points)
-        for i, idx in enumerate(self.face_vertex_indices):
-            if idx < 0 or idx >= num_verts:
-                raise ValueError(
-                    f"face_vertex_indices[{i}] = {idx} is out of range "
-                    f"[0, {num_verts})"
-                )
+        indices = np.asarray(self.face_vertex_indices, dtype=np.int64)
+        bad_mask = (indices < 0) | (indices >= num_verts)
+        if bad_mask.any():
+            first_bad = int(np.argmax(bad_mask))
+            raise ValueError(
+                f"face_vertex_indices[{first_bad}] = {self.face_vertex_indices[first_bad]} "
+                f"is out of range [0, {num_verts})"
+            )
 
-        for i, count in enumerate(self.face_vertex_counts):
-            if count < 3 or count > 4:
-                raise ValueError(
-                    f"face_vertex_counts[{i}] = {count}; "
-                    "only triangles (3) and quads (4) are supported"
-                )
+        bad_counts = (counts < 3) | (counts > 4)
+        if bad_counts.any():
+            first_bad = int(np.argmax(bad_counts))
+            raise ValueError(
+                f"face_vertex_counts[{first_bad}] = {self.face_vertex_counts[first_bad]}; "
+                "only triangles (3) and quads (4) are supported"
+            )
 
         if self.normals is not None:
             if len(self.normals) != num_verts:
@@ -86,11 +91,11 @@ class MeshData(BaseModel):
                     f"normals length ({len(self.normals)}) != "
                     f"points length ({num_verts})"
                 )
-            for i, n in enumerate(self.normals):
-                if len(n) != 3:
-                    raise ValueError(
-                        f"normals[{i}] has {len(n)} components, expected 3"
-                    )
+            nrm = np.asarray(self.normals)
+            if nrm.ndim != 2 or nrm.shape[1] != 3:
+                raise ValueError(
+                    f"normals must be (N, 3); got shape {nrm.shape}"
+                )
 
         return self
 

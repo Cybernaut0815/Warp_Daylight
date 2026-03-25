@@ -15,6 +15,8 @@ ladybug-core==0.44.29
 ladybug-geometry==1.34.14
 matplotlib==3.10.7
 numpy==2.3.4
+orjson
+python-multipart
 packaging==25.0
 pillow==12.0.0
 psutil==7.1.3

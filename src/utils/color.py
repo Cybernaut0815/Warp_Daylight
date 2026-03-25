@@ -38,47 +38,30 @@ def create_gradient(
             raise ValueError("positions must have same length as colors")
         positions = np.array(positions)
     
-    # Normalize values to 0-1 range
+    colors_arr = np.asarray(colors, dtype=np.float64)
+
     min_val = np.min(values)
     max_val = np.max(values)
-    
+
     if max_val > min_val:
-        normalized_values = (values - min_val) / (max_val - min_val)
+        normalized = np.clip(
+            (values - min_val) / (max_val - min_val), 0.0, 1.0
+        )
     else:
-        # All values are the same
-        normalized_values = np.zeros_like(values, dtype=np.float32)
-    
-    # Create output array
-    output_colors = np.zeros((len(values), 3), dtype=np.uint8)
-    
-    # For each value, find the appropriate color segment and interpolate
-    for i, val in enumerate(normalized_values):
-        # Clamp value to [0, 1]
-        val = np.clip(val, 0.0, 1.0)
-        
-        # Find which segment this value falls into
-        segment_idx = 0
-        for j in range(len(positions) - 1):
-            if val >= positions[j] and val <= positions[j + 1]:
-                segment_idx = j
-                break
-        
-        # Get colors for this segment
-        color_start = np.array(colors[segment_idx])
-        color_end = np.array(colors[segment_idx + 1])
-        
-        # Calculate interpolation factor within this segment
-        segment_start = positions[segment_idx]
-        segment_end = positions[segment_idx + 1]
-        
-        if segment_end > segment_start:
-            t = (val - segment_start) / (segment_end - segment_start)
-        else:
-            t = 0.0
-        
-        # Linear interpolation between colors
-        color = color_start * (1 - t) + color_end * t
-        output_colors[i] = color.astype(np.uint8)
-    
-    return output_colors
+        normalized = np.zeros(len(values), dtype=np.float64)
+
+    segment_indices = np.searchsorted(positions, normalized, side='right') - 1
+    segment_indices = np.clip(segment_indices, 0, len(positions) - 2)
+
+    seg_starts = positions[segment_indices]
+    seg_ends = positions[segment_indices + 1]
+    seg_widths = seg_ends - seg_starts
+    t = np.where(seg_widths > 0, (normalized - seg_starts) / seg_widths, 0.0)
+
+    color_starts = colors_arr[segment_indices]
+    color_ends = colors_arr[segment_indices + 1]
+    t_expanded = t[:, np.newaxis]
+    result = color_starts * (1.0 - t_expanded) + color_ends * t_expanded
+
+    return np.clip(result, 0, 255).astype(np.uint8)
 
