@@ -1,9 +1,9 @@
 """
-Service for converting USD-like mesh input (Pydantic models) into the numpy
-arrays expected by the Warp raycast layer.
+Service for converting USD-like mesh input into the numpy arrays expected by
+the Warp raycast layer.
 
 Responsibilities:
-  - Convert lists to contiguous float32 / int32 numpy arrays
+  - Convert lists / dicts to contiguous float32 / int32 numpy arrays
   - Triangulate quads so all faces are (N, 3) for Warp
   - Compute vertex normals, face normals, and face centroids when not provided
 """
@@ -17,38 +17,51 @@ from src.utils.mesh_utils import compute_face_normals, compute_face_centroids
 
 @dataclass
 class ProcessedMesh:
-    """Intermediate representation after converting MeshData to numpy."""
-    vertices: np.ndarray          # (V, 3) float32
-    faces: np.ndarray             # (F, 3) int32 -- always triangulated
-    vertex_normals: np.ndarray    # (V, 3) float32
-    face_normals: np.ndarray      # (F, 3) float32
-    face_centroids: np.ndarray    # (F, 3) float32
+    """Intermediate representation after converting raw mesh data to numpy.
+
+    All arrays are contiguous and in the dtypes expected by Warp:
+      - ``vertices``       (V, 3) float32
+      - ``faces``          (F, 3) int32  — always triangulated
+      - ``vertex_normals`` (V, 3) float32
+      - ``face_normals``   (F, 3) float32
+      - ``face_centroids`` (F, 3) float32
+    """
+    vertices: np.ndarray
+    faces: np.ndarray
+    vertex_normals: np.ndarray
+    face_normals: np.ndarray
+    face_centroids: np.ndarray
 
 
 def _triangulate_faces(
     face_vertex_counts: np.ndarray,
     face_vertex_indices: np.ndarray,
 ) -> np.ndarray:
-    """
-    Fan-triangulate quads into triangles.
+    """Fan-triangulate a mix of triangles and quads.
 
-    Returns:
-        faces: (F_tri, 3) int32 array of triangle vertex indices.
+    Parameters
+    ----------
+    face_vertex_counts:
+        (F,) int32 — number of vertices per face (3 or 4).
+    face_vertex_indices:
+        (sum(counts),) int32 — flattened vertex indices.
+
+    Returns
+    -------
+    faces:
+        (F_tri, 3) int32 array of triangle vertex indices.
     """
     counts = np.asarray(face_vertex_counts, dtype=np.int32)
 
-    # Fast path: all faces are triangles — just reshape
     if np.all(counts == 3):
         return face_vertex_indices.reshape(-1, 3).astype(np.int32)
 
-    # Fast path: all quads
     if np.all(counts == 4):
         quads = face_vertex_indices.reshape(-1, 4)
         tri_a = quads[:, [0, 1, 2]]
         tri_b = quads[:, [0, 2, 3]]
         return np.concatenate([tri_a, tri_b], axis=0).astype(np.int32)
 
-    # Mixed tri/quad path — vectorised gather
     offsets = np.empty(len(counts) + 1, dtype=np.int64)
     offsets[0] = 0
     np.cumsum(counts, out=offsets[1:])
@@ -76,80 +89,76 @@ def _triangulate_faces(
     ).astype(np.int32)
 
 
-def process_mesh(mesh_data: MeshData) -> ProcessedMesh:
-    """
-    Convert a ``MeshData`` Pydantic model into numpy arrays ready for Warp.
+def _build_processed_mesh(
+    vertices: np.ndarray,
+    face_vertex_counts: np.ndarray,
+    face_vertex_indices: np.ndarray,
+    vertex_normals: np.ndarray | None,
+) -> ProcessedMesh:
+    """Shared builder used by both ``process_mesh`` and ``process_mesh_from_numpy``.
 
-    Steps:
-      1. Convert points → float32 array
-      2. Triangulate quads (if any) via fan triangulation
-      3. Compute face normals and centroids
-      4. Compute vertex normals (or use provided ones)
+    Parameters
+    ----------
+    vertices:
+        (V, 3) float-like vertex positions.
+    face_vertex_counts:
+        (F,) int-like per-face vertex counts.
+    face_vertex_indices:
+        (sum(counts),) int-like flattened face indices.
+    vertex_normals:
+        (V, 3) float-like vertex normals, or ``None`` to auto-compute via
+        trimesh area-weighted averaging.
     """
-    vertices = np.ascontiguousarray(mesh_data.points, dtype=np.float32)
-    face_vertex_counts = np.array(mesh_data.face_vertex_counts, dtype=np.int32)
-    face_vertex_indices = np.array(mesh_data.face_vertex_indices, dtype=np.int32)
+    vertices = np.ascontiguousarray(vertices, dtype=np.float32)
+    face_vertex_counts = np.asarray(face_vertex_counts, dtype=np.int32)
+    face_vertex_indices = np.asarray(face_vertex_indices, dtype=np.int32)
 
     faces = _triangulate_faces(face_vertex_counts, face_vertex_indices)
-
     face_norms = compute_face_normals(vertices, faces)
     face_cents = compute_face_centroids(vertices, faces)
 
-    if mesh_data.normals is not None:
-        vertex_norms = np.ascontiguousarray(mesh_data.normals, dtype=np.float32)
+    if vertex_normals is not None:
+        v_norms = np.ascontiguousarray(vertex_normals, dtype=np.float32)
     else:
-        vertex_norms = trimesh.geometry.mean_vertex_normals(
-            vertex_count=len(vertices),
-            faces=faces,
-            face_normals=face_norms,
+        v_norms = np.ascontiguousarray(
+            trimesh.geometry.mean_vertex_normals(
+                vertex_count=len(vertices),
+                faces=faces,
+                face_normals=face_norms,
+            ),
+            dtype=np.float32,
         )
-        vertex_norms = np.ascontiguousarray(vertex_norms, dtype=np.float32)
 
     return ProcessedMesh(
         vertices=vertices,
         faces=faces,
-        vertex_normals=vertex_norms,
+        vertex_normals=v_norms,
         face_normals=face_norms,
         face_centroids=face_cents,
     )
 
 
+def process_mesh(mesh_data: MeshData) -> ProcessedMesh:
+    """Convert a ``MeshData`` Pydantic model into numpy arrays ready for Warp."""
+    return _build_processed_mesh(
+        vertices=np.asarray(mesh_data.points),
+        face_vertex_counts=np.asarray(mesh_data.face_vertex_counts),
+        face_vertex_indices=np.asarray(mesh_data.face_vertex_indices),
+        vertex_normals=np.asarray(mesh_data.normals) if mesh_data.normals is not None else None,
+    )
+
+
 def process_mesh_from_numpy(arrays: dict[str, np.ndarray]) -> ProcessedMesh:
+    """Build a ``ProcessedMesh`` from a dict of numpy arrays (e.g. NPZ upload).
+
+    Expected keys: ``points``, ``face_vertex_counts``,
+    ``face_vertex_indices``, and optionally ``normals``.
     """
-    Build a ``ProcessedMesh`` directly from numpy arrays (e.g. from an NPZ
-    upload) without going through Pydantic validation.
-
-    Expected *arrays* keys:
-      - ``points``               (V, 3)
-      - ``face_vertex_counts``   (F,)
-      - ``face_vertex_indices``  (sum(counts),)
-      - ``normals``              (V, 3)  — optional
-    """
-    vertices = np.ascontiguousarray(arrays["points"], dtype=np.float32)
-    face_vertex_counts = np.asarray(arrays["face_vertex_counts"], dtype=np.int32)
-    face_vertex_indices = np.asarray(arrays["face_vertex_indices"], dtype=np.int32)
-
-    faces = _triangulate_faces(face_vertex_counts, face_vertex_indices)
-
-    face_norms = compute_face_normals(vertices, faces)
-    face_cents = compute_face_centroids(vertices, faces)
-
-    if "normals" in arrays:
-        vertex_norms = np.ascontiguousarray(arrays["normals"], dtype=np.float32)
-    else:
-        vertex_norms = trimesh.geometry.mean_vertex_normals(
-            vertex_count=len(vertices),
-            faces=faces,
-            face_normals=face_norms,
-        )
-        vertex_norms = np.ascontiguousarray(vertex_norms, dtype=np.float32)
-
-    return ProcessedMesh(
-        vertices=vertices,
-        faces=faces,
-        vertex_normals=vertex_norms,
-        face_normals=face_norms,
-        face_centroids=face_cents,
+    return _build_processed_mesh(
+        vertices=arrays["points"],
+        face_vertex_counts=arrays["face_vertex_counts"],
+        face_vertex_indices=arrays["face_vertex_indices"],
+        vertex_normals=arrays.get("normals"),
     )
 
 

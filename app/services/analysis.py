@@ -4,11 +4,9 @@ preparation, GPU raycasting, and optional colour mapping.
 """
 import logging
 import time
+
 import numpy as np
 from datetime import datetime
-from typing import Optional
-
-logger = logging.getLogger("analyze")
 
 from app.models.mesh import MeshData
 from app.models.requests import SunConfig, AnalysisOptions
@@ -24,6 +22,7 @@ from src.utils.sun_vectors import (
 )
 from src.utils.color import create_gradient
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_GRADIENT_COLORS = [
     (0, 0, 128),
@@ -36,19 +35,24 @@ DEFAULT_GRADIENT_COLORS = [
 DEFAULT_GRADIENT_POSITIONS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
-def _resolve_sun_vectors(
-    sun: SunConfig,
-) -> tuple[np.ndarray, list[datetime], float]:
-    """
-    Generate sun direction vectors from a SunConfig.
+# ------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------
 
-    Returns (light_directions, timestamps, time_step_hours).
+def _resolve_sun_vectors(sun: SunConfig) -> tuple[np.ndarray, float]:
+    """Return ``(light_directions, time_step_hours)`` from a SunConfig.
+
+    .. note::
+        # TODO(roadmap): Add daylight factor from EPW files — EPW-based
+        #   irradiance weighting would hook into this function so that each
+        #   direction carries a weight (W/m²) in addition to the binary
+        #   hit/miss from raycasting.
     """
     if sun.start_datetime and sun.end_datetime:
         start_dt = datetime.fromisoformat(sun.start_datetime)
         end_dt = datetime.fromisoformat(sun.end_datetime)
         step_minutes = sun.time_step_minutes or (sun.time_step_hours * 60)
-        light_dirs, timestamps = get_sun_vectors_from_ladybug(
+        light_dirs, _ = get_sun_vectors_from_ladybug(
             latitude=sun.latitude,
             longitude=sun.longitude,
             start_datetime=start_dt,
@@ -57,28 +61,26 @@ def _resolve_sun_vectors(
             timezone=sun.timezone,
             coordinate_system=sun.coordinate_system,
         )
-        time_step_hours = step_minutes / 60.0
-    else:
-        light_dirs, timestamps = get_yearly_sun_vectors(
-            latitude=sun.latitude,
-            longitude=sun.longitude,
-            year=sun.year,
-            time_step_hours=sun.time_step_hours,
-            timezone=sun.timezone,
-            coordinate_system=sun.coordinate_system,
-        )
-        time_step_hours = float(sun.time_step_hours)
+        return light_dirs, step_minutes / 60.0
 
-    return light_dirs, timestamps, time_step_hours
+    light_dirs, _ = get_yearly_sun_vectors(
+        latitude=sun.latitude,
+        longitude=sun.longitude,
+        year=sun.year,
+        time_step_hours=sun.time_step_hours,
+        timezone=sun.timezone,
+        coordinate_system=sun.coordinate_system,
+    )
+    return light_dirs, float(sun.time_step_hours)
 
 
 def _build_colors(
     hit_counts: np.ndarray,
     options: AnalysisOptions,
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """Map hit counts to RGB colours via a gradient (higher sunlight = warmer).
 
-    Returns an (N, 3) uint8 numpy array, or None when colours are disabled.
+    Returns an (N, 3) uint8 numpy array, or ``None`` when colours are disabled.
     """
     if not options.return_colors:
         return None
@@ -112,8 +114,7 @@ def _build_response(
 ) -> dict:
     """Build the analysis result as a plain dict with numpy array values.
 
-    Callers are responsible for serialising (e.g. via orjson with
-    ``OPT_SERIALIZE_NUMPY``).
+    Callers serialise via ``orjson`` with ``OPT_SERIALIZE_NUMPY``.
     """
     max_possible_hours = num_sun_positions * time_step_hours
     clear_counts = num_sun_positions - hit_counts
@@ -135,102 +136,96 @@ def _build_response(
     }
 
 
-def analyze_vertices(
-    mesh_data: MeshData,
+def _run_analysis(
+    blocker: ProcessedMesh,
+    start_positions: np.ndarray,
+    start_normals: np.ndarray,
     sun: SunConfig,
     options: AnalysisOptions,
+    *,
+    label: str = "analysis",
 ) -> dict:
-    """Compute direct sunlight on mesh vertices (mesh is its own blocker)."""
+    """Core analysis pipeline shared by every public entry-point.
+
+    Parameters
+    ----------
+    blocker:
+        Mesh used for occlusion (vertices + triangulated faces).
+    start_positions:
+        (N, 3) positions to evaluate sunlight at.
+    start_normals:
+        (N, 3) surface normals at those positions.
+    sun:
+        Sun/location configuration.
+    options:
+        Raycast tuning knobs and output options.
+    label:
+        Human-readable tag used in log messages.
+    """
     t0 = time.perf_counter()
-    processed = process_mesh(mesh_data)
+    light_dirs, step_h = _resolve_sun_vectors(sun)
     t1 = time.perf_counter()
 
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-    t2 = time.perf_counter()
-
     hit_counts = raycast_directional_batch(
-        vertices=processed.vertices,
-        face_indices=processed.faces,
-        start_positions=processed.vertices,
-        start_normals=processed.vertex_normals,
+        vertices=blocker.vertices,
+        face_indices=blocker.faces,
+        start_positions=start_positions,
+        start_normals=start_normals,
         light_directions=light_dirs,
         offset_distance=options.offset_distance,
         chunk_size=options.chunk_size,
         use_backface_culling=options.use_backface_culling,
     )
-    t3 = time.perf_counter()
+    t2 = time.perf_counter()
 
     result = _build_response(
         hit_counts=hit_counts,
         num_sun_positions=len(light_dirs),
         time_step_hours=step_h,
-        computation_time=t3 - t2,
-        num_elements=len(processed.vertices),
-        mesh_vertex_count=len(processed.vertices),
-        mesh_face_count=len(processed.faces),
+        computation_time=t2 - t1,
+        num_elements=len(start_positions),
+        mesh_vertex_count=len(blocker.vertices),
+        mesh_face_count=len(blocker.faces),
         options=options,
     )
-    t4 = time.perf_counter()
+    t3 = time.perf_counter()
 
-    print(
-        f"[TIMING] analyze_vertices breakdown:\n"
-        f"    process_mesh:     {(t1 - t0) * 1000:7.1f} ms\n"
-        f"    sun_vectors:      {(t2 - t1) * 1000:7.1f} ms  ({len(light_dirs)} dirs)\n"
-        f"    GPU raycast:      {(t3 - t2) * 1000:7.1f} ms\n"
-        f"    build_response:   {(t4 - t3) * 1000:7.1f} ms  (colors={options.return_colors})\n"
-        f"    TOTAL service:    {(t4 - t0) * 1000:7.1f} ms",
-        flush=True,
+    logger.info(
+        "[TIMING] %s  sun_vectors=%.1f ms (%d dirs)  "
+        "GPU_raycast=%.1f ms  build_response=%.1f ms  TOTAL=%.1f ms",
+        label,
+        (t1 - t0) * 1000, len(light_dirs),
+        (t2 - t1) * 1000,
+        (t3 - t2) * 1000,
+        (t3 - t0) * 1000,
     )
     return result
+
+
+# ------------------------------------------------------------------
+# Public API — JSON endpoints (mesh arrives as Pydantic MeshData)
+# ------------------------------------------------------------------
+
+def analyze_vertices(
+    mesh_data: MeshData, sun: SunConfig, options: AnalysisOptions,
+) -> dict:
+    """Compute direct sunlight at mesh vertices (mesh is its own blocker)."""
+    processed = process_mesh(mesh_data)
+    return _run_analysis(
+        processed, processed.vertices, processed.vertex_normals,
+        sun, options, label="analyze_vertices",
+    )
 
 
 def analyze_faces(
-    mesh_data: MeshData,
-    sun: SunConfig,
-    options: AnalysisOptions,
+    mesh_data: MeshData, sun: SunConfig, options: AnalysisOptions,
 ) -> dict:
-    """Compute direct sunlight on face centroids (mesh is its own blocker)."""
-    t0 = time.perf_counter()
+    """Compute direct sunlight at face centroids (mesh is its own blocker)."""
     processed = process_mesh(mesh_data)
-    t1 = time.perf_counter()
-
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-    t2 = time.perf_counter()
-
-    hit_counts = raycast_directional_batch(
-        vertices=processed.vertices,
-        face_indices=processed.faces,
-        start_positions=processed.face_centroids,
-        start_normals=processed.face_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
+    return _run_analysis(
+        processed, processed.face_centroids, processed.face_normals,
+        sun, options, label="analyze_faces",
     )
-    t3 = time.perf_counter()
-
-    result = _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=t3 - t2,
-        num_elements=len(processed.face_centroids),
-        mesh_vertex_count=len(processed.vertices),
-        mesh_face_count=len(processed.faces),
-        options=options,
-    )
-    t4 = time.perf_counter()
-
-    print(
-        f"[TIMING] analyze_faces breakdown:\n"
-        f"    process_mesh:     {(t1 - t0) * 1000:7.1f} ms\n"
-        f"    sun_vectors:      {(t2 - t1) * 1000:7.1f} ms  ({len(light_dirs)} dirs)\n"
-        f"    GPU raycast:      {(t3 - t2) * 1000:7.1f} ms\n"
-        f"    build_response:   {(t4 - t3) * 1000:7.1f} ms  (colors={options.return_colors})\n"
-        f"    TOTAL service:    {(t4 - t0) * 1000:7.1f} ms",
-        flush=True,
-    )
-    return result
 
 
 def analyze_vertices_separate(
@@ -240,36 +235,12 @@ def analyze_vertices_separate(
     sun: SunConfig,
     options: AnalysisOptions,
 ) -> dict:
-    """
-    Compute direct sunlight on arbitrary target vertices using a separate
-    blocking mesh for occlusion.
-    """
+    """Sunlight at arbitrary target vertices with a separate blocker mesh."""
     blocker = process_mesh(blocking_mesh_data)
     pts, nrm = points_and_normals_to_numpy(target_points, target_normals)
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=blocker.vertices,
-        face_indices=blocker.faces,
-        start_positions=pts,
-        start_normals=nrm,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(pts),
-        mesh_vertex_count=len(blocker.vertices),
-        mesh_face_count=len(blocker.faces),
-        options=options,
+    return _run_analysis(
+        blocker, pts, nrm, sun, options,
+        label="analyze_vertices_separate",
     )
 
 
@@ -279,102 +250,36 @@ def analyze_faces_separate(
     sun: SunConfig,
     options: AnalysisOptions,
 ) -> dict:
-    """
-    Compute direct sunlight on target mesh face centroids using a separate
-    blocking mesh for occlusion.
-    """
+    """Sunlight at target-mesh face centroids with a separate blocker mesh."""
     blocker = process_mesh(blocking_mesh_data)
     target = process_mesh(target_mesh_data)
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=blocker.vertices,
-        face_indices=blocker.faces,
-        start_positions=target.face_centroids,
-        start_normals=target.face_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(target.face_centroids),
-        mesh_vertex_count=len(blocker.vertices),
-        mesh_face_count=len(blocker.faces),
-        options=options,
+    return _run_analysis(
+        blocker, target.face_centroids, target.face_normals,
+        sun, options, label="analyze_faces_separate",
     )
 
+
+# ------------------------------------------------------------------
+# Public API — Numpy endpoints (mesh arrives as pre-built arrays)
+# ------------------------------------------------------------------
 
 def analyze_vertices_numpy(
-    processed: ProcessedMesh,
-    sun: SunConfig,
-    options: AnalysisOptions,
+    processed: ProcessedMesh, sun: SunConfig, options: AnalysisOptions,
 ) -> dict:
     """Like ``analyze_vertices`` but accepts a pre-built ProcessedMesh."""
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=processed.vertices,
-        face_indices=processed.faces,
-        start_positions=processed.vertices,
-        start_normals=processed.vertex_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(processed.vertices),
-        mesh_vertex_count=len(processed.vertices),
-        mesh_face_count=len(processed.faces),
-        options=options,
+    return _run_analysis(
+        processed, processed.vertices, processed.vertex_normals,
+        sun, options, label="analyze_vertices_numpy",
     )
 
 
 def analyze_faces_numpy(
-    processed: ProcessedMesh,
-    sun: SunConfig,
-    options: AnalysisOptions,
+    processed: ProcessedMesh, sun: SunConfig, options: AnalysisOptions,
 ) -> dict:
     """Like ``analyze_faces`` but accepts a pre-built ProcessedMesh."""
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=processed.vertices,
-        face_indices=processed.faces,
-        start_positions=processed.face_centroids,
-        start_normals=processed.face_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(processed.face_centroids),
-        mesh_vertex_count=len(processed.vertices),
-        mesh_face_count=len(processed.faces),
-        options=options,
+    return _run_analysis(
+        processed, processed.face_centroids, processed.face_normals,
+        sun, options, label="analyze_faces_numpy",
     )
 
 
@@ -386,30 +291,9 @@ def analyze_vertices_separate_numpy(
     options: AnalysisOptions,
 ) -> dict:
     """Like ``analyze_vertices_separate`` but with pre-built numpy arrays."""
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=blocker.vertices,
-        face_indices=blocker.faces,
-        start_positions=target_points,
-        start_normals=target_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(target_points),
-        mesh_vertex_count=len(blocker.vertices),
-        mesh_face_count=len(blocker.faces),
-        options=options,
+    return _run_analysis(
+        blocker, target_points, target_normals,
+        sun, options, label="analyze_vertices_separate_numpy",
     )
 
 
@@ -420,34 +304,36 @@ def analyze_faces_separate_numpy(
     options: AnalysisOptions,
 ) -> dict:
     """Like ``analyze_faces_separate`` but with pre-built ProcessedMesh."""
-    light_dirs, timestamps, step_h = _resolve_sun_vectors(sun)
-
-    t0 = time.perf_counter()
-    hit_counts = raycast_directional_batch(
-        vertices=blocker.vertices,
-        face_indices=blocker.faces,
-        start_positions=target.face_centroids,
-        start_normals=target.face_normals,
-        light_directions=light_dirs,
-        offset_distance=options.offset_distance,
-        chunk_size=options.chunk_size,
-        use_backface_culling=options.use_backface_culling,
-    )
-    elapsed = time.perf_counter() - t0
-
-    return _build_response(
-        hit_counts=hit_counts,
-        num_sun_positions=len(light_dirs),
-        time_step_hours=step_h,
-        computation_time=elapsed,
-        num_elements=len(target.face_centroids),
-        mesh_vertex_count=len(blocker.vertices),
-        mesh_face_count=len(blocker.faces),
-        options=options,
+    return _run_analysis(
+        blocker, target.face_centroids, target.face_normals,
+        sun, options, label="analyze_faces_separate_numpy",
     )
 
+
+# ------------------------------------------------------------------
+# Standalone sun-vector query
+# ------------------------------------------------------------------
 
 def compute_sun_vectors(sun: SunConfig) -> tuple[np.ndarray, list[datetime]]:
-    """Return raw sun direction vectors + timestamps for a SunConfig."""
-    light_dirs, timestamps, _ = _resolve_sun_vectors(sun)
-    return light_dirs, timestamps
+    """Return raw sun direction vectors and timestamps for a SunConfig."""
+    if sun.start_datetime and sun.end_datetime:
+        start_dt = datetime.fromisoformat(sun.start_datetime)
+        end_dt = datetime.fromisoformat(sun.end_datetime)
+        step_minutes = sun.time_step_minutes or (sun.time_step_hours * 60)
+        return get_sun_vectors_from_ladybug(
+            latitude=sun.latitude,
+            longitude=sun.longitude,
+            start_datetime=start_dt,
+            end_datetime=end_dt,
+            time_step_minutes=step_minutes,
+            timezone=sun.timezone,
+            coordinate_system=sun.coordinate_system,
+        )
+    return get_yearly_sun_vectors(
+        latitude=sun.latitude,
+        longitude=sun.longitude,
+        year=sun.year,
+        time_step_hours=sun.time_step_hours,
+        timezone=sun.timezone,
+        coordinate_system=sun.coordinate_system,
+    )

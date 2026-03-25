@@ -21,6 +21,7 @@ router = APIRouter(tags=["sun"])
     ),
 )
 async def sun_vectors(body: SunVectorsRequest) -> SunVectorsResponse:
+    """Return sun direction vectors for a given location and time config."""
     light_dirs, timestamps = compute_sun_vectors(body.sun)
 
     entries = [

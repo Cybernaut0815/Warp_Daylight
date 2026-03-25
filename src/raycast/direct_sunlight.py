@@ -1,10 +1,18 @@
+"""
+GPU-accelerated ray-mesh intersection kernels for direct sunlight analysis.
+
+Uses NVIDIA Warp to cast rays from surface positions toward sun directions and
+count occlusions.  Two kernel variants are provided:
+
+- ``raycast_kernel``            — one ray per thread (single direction).
+- ``raycast_batch_kernel``      — all sun directions per thread (batched).
+
+The public Python helpers ``raycast_directional`` and
+``raycast_directional_batch`` handle array conversion, Warp mesh creation,
+and optional chunking for large direction sets.
+"""
 import warp as wp
 import numpy as np
-
-### -------------------------------------------------------------- ###
-### All AI generated code below ###
-### Needs testing and optimization ###
-### -------------------------------------------------------------- ###
 
 @wp.kernel
 def raycast_kernel(
