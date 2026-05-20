@@ -16,10 +16,11 @@ And four binary (numpy) endpoints for maximum throughput:
 import io
 import logging
 import time
+from enum import Enum
 
 import numpy as np
 import orjson
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import Response
 
 from app.models.requests import (
@@ -39,6 +40,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analyze", tags=["analysis"])
 
 
+class ResponseFormat(str, Enum):
+    json = "json"
+    npz = "npz"
+
+
+_RESPONSE_FORMAT_DOC = (
+    "Response format: `json` (default) returns standard JSON; "
+    "`npz` returns a binary numpy archive for faster client-side parsing."
+)
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
@@ -55,18 +67,72 @@ def _numpy_json_response(data: dict) -> Response:
     return Response(content=content, media_type="application/json")
 
 
+def _numpy_npz_response(data: dict) -> Response:
+    """Serialise an analysis result dict as a downloadable NPZ archive.
+
+    Array fields (``sunlight_hours``, ``hit_counts``, ``colors``) are stored
+    as numpy arrays.  Scalar fields and the ``metadata`` dict are stored as
+    a JSON blob under the ``metadata_json`` key.
+    """
+    t0 = time.perf_counter()
+    buf = io.BytesIO()
+    arrays: dict[str, np.ndarray] = {}
+
+    for key in ("sunlight_hours", "hit_counts"):
+        val = data.get(key)
+        if val is not None:
+            arrays[key] = np.asarray(val)
+
+    colors = data.get("colors")
+    if colors is not None:
+        arrays["colors"] = np.asarray(colors, dtype=np.uint8)
+
+    scalars = {
+        "total_sun_positions": data.get("total_sun_positions"),
+        "max_possible_hours": data.get("max_possible_hours"),
+        "metadata": data.get("metadata"),
+    }
+    arrays["metadata_json"] = np.void(orjson.dumps(scalars))
+
+    np.savez(buf, **arrays)
+    content = buf.getvalue()
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "[TIMING] NPZ serialization: %.1f ms  (%.1f KB)",
+        elapsed_ms, len(content) / 1024,
+    )
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename=analysis.npz"},
+    )
+
+
 def _load_npz_mesh(raw_bytes: bytes) -> dict[str, np.ndarray]:
     """Load an in-memory NPZ archive into a dict of numpy arrays."""
     with np.load(io.BytesIO(raw_bytes), allow_pickle=False) as npz:
         return {key: npz[key] for key in npz.files}
 
 
-def _timed_response(label: str, service_fn, *args, **kwargs) -> Response:
+def _serialize_response(data: dict, fmt: ResponseFormat) -> Response:
+    """Serialize an analysis result dict in the requested format."""
+    if fmt == ResponseFormat.npz:
+        return _numpy_npz_response(data)
+    return _numpy_json_response(data)
+
+
+def _timed_response(
+    label: str,
+    service_fn,
+    *args,
+    response_format: ResponseFormat = ResponseFormat.json,
+    **kwargs,
+) -> Response:
     """Call *service_fn*, serialise the result, and log timing."""
     t_start = time.perf_counter()
     result = service_fn(*args, **kwargs)
     t_service = time.perf_counter()
-    resp = _numpy_json_response(result)
+    resp = _serialize_response(result, response_format)
     t_end = time.perf_counter()
     logger.info(
         "[TIMING] %s TOTAL: %.1f ms  (service=%.1f ms, serialize=%.1f ms)",
@@ -103,12 +169,18 @@ def _timed_response(label: str, service_fn, *args, **kwargs) -> Response:
         "`/vertices/numpy` endpoint which accepts binary NPZ uploads."
     ),
 )
-async def analyze_vertices(body: AnalyzeVerticesRequest) -> Response:
+async def analyze_vertices(
+    body: AnalyzeVerticesRequest,
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
+) -> Response:
     """Vertex-based sunlight analysis (self-blocking mesh)."""
     return _timed_response(
         "/analyze/vertices",
         analysis_service.analyze_vertices,
         mesh_data=body.mesh, sun=body.sun, options=body.options,
+        response_format=response_format,
     )
 
 
@@ -125,12 +197,18 @@ async def analyze_vertices(body: AnalyzeVerticesRequest) -> Response:
         "`/faces/numpy` endpoint."
     ),
 )
-async def analyze_faces(body: AnalyzeFacesRequest) -> Response:
+async def analyze_faces(
+    body: AnalyzeFacesRequest,
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
+) -> Response:
     """Face-based sunlight analysis (self-blocking mesh)."""
     return _timed_response(
         "/analyze/faces",
         analysis_service.analyze_faces,
         mesh_data=body.mesh, sun=body.sun, options=body.options,
+        response_format=response_format,
     )
 
 
@@ -146,6 +224,9 @@ async def analyze_faces(body: AnalyzeFacesRequest) -> Response:
 )
 async def analyze_vertices_separate(
     body: AnalyzeVerticesSeparateRequest,
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Vertex-based analysis with a separate blocker mesh."""
     return _timed_response(
@@ -155,6 +236,7 @@ async def analyze_vertices_separate(
         target_points=body.target_points,
         target_normals=body.target_normals,
         sun=body.sun, options=body.options,
+        response_format=response_format,
     )
 
 
@@ -169,6 +251,9 @@ async def analyze_vertices_separate(
 )
 async def analyze_faces_separate(
     body: AnalyzeFacesSeparateRequest,
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Face-based analysis with a separate blocker mesh."""
     return _timed_response(
@@ -177,6 +262,7 @@ async def analyze_faces_separate(
         blocking_mesh_data=body.blocking_mesh,
         target_mesh_data=body.target_mesh,
         sun=body.sun, options=body.options,
+        response_format=response_format,
     )
 
 
@@ -206,6 +292,9 @@ async def analyze_vertices_numpy(
     mesh_npz: UploadFile = File(..., description="NPZ archive with mesh arrays"),
     sun_config: str = Form(..., description="SunConfig as JSON string"),
     options: str = Form(default="{}", description="AnalysisOptions as JSON string"),
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Vertex analysis from binary NPZ mesh upload."""
     processed = process_mesh_from_numpy(_load_npz_mesh(await mesh_npz.read()))
@@ -214,6 +303,7 @@ async def analyze_vertices_numpy(
     return _timed_response(
         "/analyze/vertices/numpy",
         analysis_service.analyze_vertices_numpy, processed, sun, opts,
+        response_format=response_format,
     )
 
 
@@ -231,6 +321,9 @@ async def analyze_faces_numpy(
     mesh_npz: UploadFile = File(..., description="NPZ archive with mesh arrays"),
     sun_config: str = Form(..., description="SunConfig as JSON string"),
     options: str = Form(default="{}", description="AnalysisOptions as JSON string"),
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Face analysis from binary NPZ mesh upload."""
     processed = process_mesh_from_numpy(_load_npz_mesh(await mesh_npz.read()))
@@ -239,6 +332,7 @@ async def analyze_faces_numpy(
     return _timed_response(
         "/analyze/faces/numpy",
         analysis_service.analyze_faces_numpy, processed, sun, opts,
+        response_format=response_format,
     )
 
 
@@ -265,6 +359,9 @@ async def analyze_vertices_separate_numpy(
     ),
     sun_config: str = Form(..., description="SunConfig as JSON string"),
     options: str = Form(default="{}", description="AnalysisOptions as JSON string"),
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Vertex analysis (separate blocker) from binary NPZ uploads."""
     blocker = process_mesh_from_numpy(
@@ -280,6 +377,7 @@ async def analyze_vertices_separate_numpy(
         "/analyze/vertices/separate/numpy",
         analysis_service.analyze_vertices_separate_numpy,
         blocker, target_pts, target_nrm, sun, opts,
+        response_format=response_format,
     )
 
 
@@ -305,6 +403,9 @@ async def analyze_faces_separate_numpy(
     ),
     sun_config: str = Form(..., description="SunConfig as JSON string"),
     options: str = Form(default="{}", description="AnalysisOptions as JSON string"),
+    response_format: ResponseFormat = Query(
+        default=ResponseFormat.json, description=_RESPONSE_FORMAT_DOC,
+    ),
 ) -> Response:
     """Face analysis (separate blocker) from binary NPZ uploads."""
     blocker = process_mesh_from_numpy(
@@ -319,4 +420,5 @@ async def analyze_faces_separate_numpy(
         "/analyze/faces/separate/numpy",
         analysis_service.analyze_faces_separate_numpy,
         blocker, target, sun, opts,
+        response_format=response_format,
     )

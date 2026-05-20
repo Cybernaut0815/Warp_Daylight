@@ -66,7 +66,9 @@ app = FastAPI(
         "| Family | Input | Best for |\n"
         "|--------|-------|----------|\n"
         "| `/analyze/*` (JSON) | Pydantic request body | Small-medium meshes |\n"
-        "| `/analyze/*/numpy` | NPZ file upload | Large meshes (>50k verts) |\n"
+        "| `/analyze/*/numpy` | NPZ file upload | Large meshes (>50k verts) |\n\n"
+        "All endpoints accept `?response_format=npz` to return a binary NPZ "
+        "archive instead of JSON.\n"
     ),
     lifespan=lifespan,
 )
